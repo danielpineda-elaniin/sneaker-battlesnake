@@ -26,25 +26,44 @@ Dos escenarios de competencia:
 
 ### Presupuesto de tiempo
 
-Battlesnake otorga 500ms por movimiento. Reparto:
+Battlesnake otorga 500ms por movimiento. Reparto objetivo:
 
 | Concepto | ms |
 |---|---|
 | Round-trip de red + parseo | ~100 (reservado) |
-| Búsqueda | 350 (corte duro) |
+| Búsqueda | `SEARCH_BUDGET_MS` (corte duro) |
 | Serialización + margen | 50 |
 
+`SEARCH_BUDGET_MS` es una constante exportada, con valor inicial 350. **No
+se hardcodea**: el valor definitivo se fija a partir de la medición del
+arena, y cambiar de plataforma o de plan es una edición de una línea.
+
 La búsqueda consulta el reloj en cada nodo y aborta al cruzar el deadline,
-descartando la profundidad parcial en curso.
+descartando la profundidad parcial en curso. Como la profundidad iterativa
+siempre conserva el mejor resultado del último nivel completo, reducir el
+presupuesto degrada la calidad de forma continua en vez de romper nada.
 
 ### Cloudflare Workers
 
-El límite de CPU por invocación se declara explícitamente en
-`wrangler.toml` (`limits.cpu_ms = 400`). **El plan gratuito limita a 10ms de
-CPU, lo cual es inviable para este diseño** — requiere plan de pago. Esto se
-verifica antes de la primera implementación de la búsqueda; si el plan de
-pago no está disponible, el diseño degrada a profundidad 0 (la heurística
-pura sigue siendo funcional y compite razonablemente).
+Dos límites distintos, que conviene no confundir:
+
+- **Cold start**: los isolates de V8 arrancan en ~5ms. Esta es la razón
+  principal para elegir Workers sobre alternativas basadas en contenedores.
+  En Battlesnake un cold start de un segundo en el primer movimiento de la
+  partida es una derrota inmediata; Workers no tiene ese modo de fallo.
+- **CPU por invocación**: el plan gratuito limita a 10ms. El plan de pago lo
+  declara explícitamente en `wrangler.toml` vía `limits.cpu_ms`.
+
+**El plan gratuito no se descarta a priori.** El árbol de búsqueda aquí es
+pequeño: un duelo a profundidad 6 son ~729 nodos antes de poda, y cada nodo
+cuesta del orden de 2000 operaciones. 10ms de CPU pueden bastar para
+profundidad 4 en duelo. La decisión de plan se toma con los datos del arena
+(§10), no por estimación.
+
+Si la medición muestra que el presupuesto no alcanza, hay dos palancas antes
+de pagar: bajar `SEARCH_BUDGET_MS` y aceptar menos profundidad, o endurecer
+el filtro de proximidad. La heurística de profundidad 0 sigue siendo una
+serpiente funcional en el peor caso.
 
 ### Sin estado
 
@@ -234,7 +253,7 @@ gestionan los filtros de combate, no el posicionamiento.
 
 ```
 findMove(gameState):
-  deadline = now + 350ms
+  deadline = now + SEARCH_BUDGET_MS
   legales = movimientos no suicidas
   si legales vacío → cadena de respaldo
   mejor = elección heurística de profundidad 0   # siempre disponible
@@ -347,6 +366,18 @@ adivinanza, y es la razón por la que se construye antes que la búsqueda. Sin
 arena no hay forma de saber si un cambio de pesos mejoró o empeoró la
 serpiente.
 
+### Instrumentación de rendimiento
+
+El arena también mide el costo de la búsqueda, porque de ahí sale la
+decisión de plataforma y el valor de `SEARCH_BUDGET_MS`:
+
+- nodos evaluados por segundo
+- CPU-ms por profundidad alcanzada, separado por duelo y FFA
+- distribución de profundidad alcanzada por turno
+
+Estas cifras se recogen antes de fijar el presupuesto de tiempo y antes de
+decidir entre plan gratuito y de pago en Workers.
+
 ### Pruebas unitarias
 
 `node:test` y `node:assert`, nativos. Sin framework, sin dependencias.
@@ -364,14 +395,21 @@ Cobertura mínima:
 
 ## 11. Despliegue
 
-`wrangler.toml` con `limits.cpu_ms = 400`. Despliegue por
-`wrangler deploy`. Sin variables de entorno ni secretos — Sneaker no depende
-de configuración externa.
+Despliegue por `wrangler deploy`. Sin variables de entorno ni secretos —
+Sneaker no depende de configuración externa.
+
+`limits.cpu_ms` se declara en `wrangler.toml` únicamente si la medición del
+arena determina que hace falta el plan de pago. Mientras el plan gratuito
+sostenga la profundidad objetivo, `wrangler.toml` no lleva bloque `limits`.
 
 ## 12. Fuera de alcance
 
 Excluido deliberadamente:
 
+- **Tail-chasing como comportamiento explícito.** Emerge del flood fill
+  tail-aware: la casilla de la propia cola es la de mayor espacio alcanzable,
+  así que la evaluación la prefiere sin ayuda. Codificarlo aparte crearía una
+  segunda fuente de verdad capaz de contradecir a la primera.
 - Rulesets royale, wrapped, constrictor. Solo estándar.
 - Zonas de peligro (hazard sauce).
 - Estado persistente entre turnos o partidas.
