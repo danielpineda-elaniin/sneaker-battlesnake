@@ -65,6 +65,27 @@ de pagar: bajar `SEARCH_BUDGET_MS` y aceptar menos profundidad, o endurecer
 el filtro de proximidad. La heurística de profundidad 0 sigue siendo una
 serpiente funcional en el peor caso.
 
+### Portabilidad de plataforma
+
+**El motor no contiene APIs específicas de plataforma.** `board.js`,
+`space.js`, `eval.js` y `search.js` usan exclusivamente JavaScript estándar;
+`index.js` es un adaptador delgado que solo traduce entre el handler `fetch`
+y el motor, usando `Request`/`Response` de la plataforma web.
+
+La consecuencia práctica: el mismo código corre sin modificación en
+Cloudflare Workers, Deno Deploy, Supabase Edge Functions, Vercel y Bun.
+Todos ellos son isolates de V8 con cold start cercano a cero, así que la
+ventaja principal de Workers se conserva en cualquiera de ellos.
+
+Si la medición del arena muestra que el límite de CPU de Workers ahoga la
+profundidad, el fallback primario es **Supabase Edge Functions** (Deno
+Deploy, límites de CPU más holgados para cómputo intensivo). Cambiar de
+plataforma reescribe `index.js` y nada más.
+
+Esta restricción existe precisamente para que la elección de plataforma no
+sea una decisión de arquitectura. Es una decisión de despliegue, reversible
+con una edición de un archivo.
+
 ### Sin estado
 
 Todo movimiento se computa exclusivamente desde el payload de la petición.
@@ -129,8 +150,38 @@ el **máximo** de sus tiempos de vaciado. Esto resuelve el caso "acaba de
 comer" sin lógica especial: la casilla duplicada hereda el mayor de los dos
 tiempos y correctamente permanece bloqueada un turno extra.
 
-La grilla resultante `freeAt[x][y]` — 0 para casillas vacías, `n - i` para
-ocupadas — es la entrada compartida de flood fill y Voronoi.
+La grilla resultante — 0 para casillas vacías, `n - i` para ocupadas — es la
+entrada compartida de flood fill y Voronoi.
+
+### Representación en memoria
+
+`freeAt` es una **`Int8Array` plana**, indexada por `idx = y * ancho + x`.
+No un array anidado `[x][y]`.
+
+Dos razones, ambas de rendimiento y ninguna prematura:
+
+- Un array anidado cuesta dos indirecciones de memoria por acceso; la plana
+  cuesta una. El flood fill y el Voronoi tocan cada casilla varias veces por
+  nodo del árbol.
+- Instanciar arrays nuevos en cada simulación de turno dispara el recolector
+  de basura, y el GC consume exactamente el presupuesto de CPU que la
+  búsqueda necesita.
+
+Los buffers se **preasignan al inicio de la búsqueda y se reutilizan**: un
+pool indexado por profundidad, `buffers[depth]`, con `MAX_DEPTH` entradas.
+Cada nivel de la recursión escribe en el suyo, así que un nodo padre
+conserva su estado mientras el hijo trabaja.
+
+Escribir esto con arrays planas desde la primera versión no es más difícil
+que escribirlo con arrays anidados, así que no se difiere.
+
+Los **bitboards** (representar el tablero con operaciones a nivel de bits)
+quedan como optimización posterior, no como parte de la primera versión.
+`freeAt` almacena conteos de turno, no booleanos, así que un bitboard
+requeriría planos de bits — bastante más complejidad, y probablemente
+innecesaria una vez eliminada la presión de GC. Se reconsidera solo si la
+instrumentación del arena (§10) muestra que la asignación de memoria sigue
+siendo el cuello de botella.
 
 ## 5. Algoritmos espaciales
 
@@ -229,7 +280,7 @@ una vez que dominamos en longitud, el peso cae y priorizamos el espacio.
 
 ```js
 export const WEIGHTS = {
-  ffa:  { space: 3.0, terr: 2.0, len: 1.0, center: 0.5, food: 1.5 },
+  ffa:  { space: 3.0, terr: 2.0, len: 1.0, center: 0.0, food: 1.5 },
   duel: { space: 3.0, terr: 3.5, len: 1.5, center: 0.8, food: 1.0 },
 };
 ```
@@ -241,11 +292,24 @@ selecciona por `board.snakes.length` — 2 serpientes vivas → `duel`, más →
 Los modos son vectores de peso, no ramas de código. Una sola ruta de
 ejecución, diffeable y afinable por búsqueda en rejilla offline.
 
-**El centro se premia, no se penaliza.** El diseño original prefería bordes y
-anillos exteriores. Está invertido: un borde reduce las salidas de 4 a 3, una
-esquina a 2. La maniobrabilidad del centro es exactamente lo que mantiene
-viva a una serpiente evasiva. El riesgo de head-to-head en el centro lo
-gestionan los filtros de combate, no el posicionamiento.
+**`center` vale 0 en FFA y positivo en duelo.** El diseño original prefería
+bordes y anillos exteriores en FFA, lo cual está invertido: un borde reduce
+las salidas de 4 a 3, una esquina a 2, y pagar por buscar esquinas es pagar
+por acorralarse.
+
+Pero premiar el centro en FFA tampoco es correcto, por una razón distinta a
+la del peligro: **`center` es un proxy crudo de un espacio que `terr` ya mide
+directamente y mejor.** Si tres rivales se amontonan en el medio, los flancos
+quedan como territorio no disputado y el Voronoi los premia solo. El
+flanqueo emerge de `terr`, no de penalizar el centro.
+
+En duelo el centro sí tiene valor propio: la geometría de partir el tablero
+en dos mitades depende de ocupar el eje medio, y eso `terr` no lo expresa
+igual de bien. De ahí el peso positivo.
+
+Un peso negativo en FFA queda descartado explícitamente: empujaría a Sneaker
+hacia casillas de 3 y 2 salidas de forma activa, que es el modo de fallo que
+este término existe para evitar.
 
 ## 7. Búsqueda
 
