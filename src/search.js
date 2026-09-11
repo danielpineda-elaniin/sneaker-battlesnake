@@ -133,7 +133,7 @@ export function findMove(state, you, w) {
               you, depth - 1, alpha, beta, deadline, w, buffers, null, ctx
             )
           : minOpp(state, you, myMove, depth, alpha, beta, deadline, w, buffers, opps,
-                   buffers[depth], 0, new Array(opps.length), ctx);
+                   g, 0, new Array(opps.length), ctx);
         if (score > iterBestScore) { iterBestScore = score; iterBest = myMove; }
         alpha = Math.max(alpha, iterBestScore);
         if (Date.now() >= deadline) throw new Timeout();
