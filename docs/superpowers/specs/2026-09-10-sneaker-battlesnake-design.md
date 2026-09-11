@@ -293,10 +293,18 @@ operaciones — el argumento de rendimiento a favor de Manhattan no existe.
 | `terr` | casillas Voronoi propias / casillas libres | 0..1 |
 | `lenAdv` | (nuestra longitud − longitud del rival más largo) / ancho, acotado a ±1 | -1..1 |
 | `center` | 1 − (distancia Manhattan al centro / `radioMax`) | 0..1 |
+| `choke` | 1 − (flood fill desde la cabeza del rival más cercano / casillas totales) | 0..1 |
 | `food` | ver abajo | 0..1, o `HUNGER_OVERRIDE` |
 
 donde `radioMax = floor(ancho/2) + floor(alto/2)` — la distancia Manhattan
 desde una esquina al centro, 10 en un tablero 11x11.
+
+Todos los términos siguen la convención "más alto es mejor para Sneaker",
+así que todos los pesos son positivos. `choke` sube cuando el rival tiene
+menos espacio, no al revés.
+
+Un término con peso 0 no se calcula. Esto importa para `choke`, que cuesta
+un flood fill extra por hoja del árbol y en FFA no aporta nada.
 
 Resultado: suma ponderada de los términos.
 
@@ -322,10 +330,10 @@ compite de verdad contra el control territorial.
 
 **`HUNGER_OVERRIDE = 100` es una salvaguarda dura.** Si la salud no alcanza
 para llegar a la comida más cercana con dos turnos de margen, comer se vuelve
-dominante. Los demás términos están acotados a 0..1 y sus pesos suman menos
-de 9 en ambos vectores, así que `food × 100` supera cualquier combinación
-posible por un margen amplio. Si los pesos se afinan al alza, esta relación
-debe reverificarse.
+dominante. Los demás términos están acotados a 0..1 y sus pesos suman
+alrededor de 11 en el vector más cargado, así que `food × 100` supera
+cualquier combinación posible por un margen amplio. Si los pesos se afinan
+al alza, esta relación debe reverificarse.
 
 **El crecimiento temprano se ata a la ventaja de longitud, no al número de
 turno.** Mientras no seamos estrictamente los más largos, la comida pesa más;
@@ -335,8 +343,8 @@ una vez que dominamos en longitud, el peso cae y priorizamos el espacio.
 
 ```js
 export const WEIGHTS = {
-  ffa:  { space: 3.0, terr: 2.0, len: 1.0, center: 0.0, food: 1.5 },
-  duel: { space: 3.0, terr: 3.5, len: 1.5, center: 0.8, food: 1.0 },
+  ffa:  { space: 3.0, terr: 2.0, len: 1.0, center: 0.0, choke: 0.0, food: 1.5 },
+  duel: { space: 3.0, terr: 3.5, len: 1.5, center: 0.8, choke: 2.0, food: 1.0 },
 };
 
 export const OPPONENT_CAP = 2;
@@ -365,6 +373,24 @@ igual de bien.
 Un peso negativo en FFA queda descartado: empujaría a Sneaker hacia casillas
 de 3 y 2 salidas de forma activa, que es el modo de fallo que este término
 existe para evitar.
+
+**`choke` es lo que convierte el duelo en caza.** Sin él, la evaluación solo
+mide el espacio de Sneaker. Si puede encerrar al rival en una zona que
+tampoco le sirve a ella, su Voronoi no sube y la búsqueda es indiferente a
+la jugada. La búsqueda paranoica es defensiva por naturaleza — sobrevive y
+acumula — pero no persigue. `choke` valora directamente la pérdida de
+espacio del rival, y con eso la búsqueda encuentra sola las jugadas de
+bloqueo: cortar el tablero, sellar un pasillo, usar la cabeza como muro
+cuando Sneaker es más larga. Es el término que hace honor a "estrangular
+territorialmente".
+
+Vale 0 en FFA de forma deliberada. Gastar movimientos dañando a uno de tres
+rivales es regalar tempo a los otros dos; en FFA se sobrevive, y la
+asfixia queda para cuando el tablero se reduzca a dos.
+
+`choke` se calcula contra el rival más cercano por distancia Manhattan. En
+duelo solo hay uno; la regla existe para que el término esté definido si
+alguna vez se activa con más rivales.
 
 ## 7. Búsqueda
 
@@ -564,6 +590,9 @@ Cobertura mínima:
 - **Voronoi**: reparto esperado en tableros conocidos, incluyendo empate de
   distancia resuelto por longitud.
 - **Evaluación**: la salvaguarda de hambre dispara cuando `salud <= d + 2`.
+  Y en un tablero donde un movimiento sella un pasillo del rival sin ganar
+  territorio propio, el vector `duel` lo prefiere y el vector `ffa` es
+  indiferente — es la prueba de que `choke` hace lo que existe para hacer.
 - **Filtros duros**: el filtro de head-to-head rechaza la casilla adyacente
   a un rival de igual longitud cuando existe alternativa.
 
