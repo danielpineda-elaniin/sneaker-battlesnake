@@ -4,6 +4,9 @@ export const WEIGHTS = {
   duel: { space: 3.0, terr: 3.5, len: 1.5, center: 0.8, choke: 2.0, food: 1.0 },
 };
 
+export const OPPONENT_CAP = 2;
+export const SEARCH_BUDGET_MS = 350;
+
 export function pick(state) {
   let alive = 0;
   for (const s of state.snakes) if (s.alive) alive++;
