@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { idx, buildFreeAt } from '../src/board.js';
 import { floodFill } from '../src/space.js';
 import { WEIGHTS, pick } from '../src/weights.js';
-import { evaluate, HUNGER_MULT } from '../src/eval.js';
+import { evaluate, HUNGER_MULT, legalMoves, chooseMove } from '../src/eval.js';
 import { mk } from './helpers.js';
 
 const ZERO = { space: 0, terr: 0, len: 0, center: 0, choke: 0, food: 0 };
@@ -95,4 +95,61 @@ test('evaluate: choke rewards a boxed-in rival and is skipped at weight 0', () =
   assert.ok(vBoxed > vOpen + 0.5, `boxed ${vBoxed} should beat open ${vOpen}`);
   assert.ok(Math.abs(vBoxed - (1 - 1 / 121)) < 1e-9);
   assert.equal(evaluate(boxed, 0, ZERO), 0);
+});
+
+test('legalMoves: wall and own body are removed', () => {
+  const s = mk({ snakes: [{ body: [[0, 0], [1, 0], [2, 0]] }, { body: [[9, 9], [9, 8]] }] });
+  assert.deepEqual(legalMoves(s, 0, buildFreeAt(s)), ['up']);
+});
+
+test('legalMoves: moving onto a vacating tail is allowed', () => {
+  const s = mk({ snakes: [{ body: [[5, 5], [5, 4], [4, 4], [4, 5]] }, { body: [[9, 9], [9, 8]] }] });
+  assert.ok(legalMoves(s, 0, buildFreeAt(s)).includes('left'));
+});
+
+test('legalMoves: head-to-head cells of an equal-or-longer rival are removed', () => {
+  const s = mk({ snakes: [{ body: [[5, 5], [5, 4], [5, 3]] }, { body: [[7, 5], [8, 5], [9, 5]] }] });
+  const moves = legalMoves(s, 0, buildFreeAt(s));
+  assert.deepEqual(moves, ['up', 'left']);
+});
+
+test('legalMoves: head-to-head cells of a shorter rival are allowed', () => {
+  const s = mk({ snakes: [{ body: [[5, 5], [5, 4], [5, 3]] }, { body: [[7, 5], [8, 5]] }] });
+  assert.ok(legalMoves(s, 0, buildFreeAt(s)).includes('right'));
+});
+
+test('legalMoves: a shorter rival adjacent to food counts as one longer', () => {
+  const s = mk({ snakes: [{ body: [[5, 5], [5, 4], [5, 3]] }, { body: [[7, 5], [8, 5]] }], food: [[7, 6]] });
+  assert.ok(!legalMoves(s, 0, buildFreeAt(s)).includes('right'));
+});
+
+test('legalMoves: relaxation ladder', () => {
+  const opp = [];
+  for (let y = 10; y >= 0; y--) opp.push([1, y]);
+  for (let x = 2; x <= 10; x++) opp.push([x, 0]);
+  const s = mk({ snakes: [{ body: [[0, 1], [0, 2], [0, 3]] }, { body: opp }] });
+  const g = buildFreeAt(s);
+  assert.deepEqual(legalMoves(s, 0, g, 0), []);
+  assert.deepEqual(legalMoves(s, 0, g, 1), ['down']);
+  assert.deepEqual(legalMoves(s, 0, g, 2), ['down']);
+  assert.deepEqual(legalMoves(s, 0, g, 3), ['up', 'down', 'right']);
+});
+
+test('chooseMove: reports the level it had to fall back to', () => {
+  const opp = [];
+  for (let y = 10; y >= 0; y--) opp.push([1, y]);
+  for (let x = 2; x <= 10; x++) opp.push([x, 0]);
+  const s = mk({ snakes: [{ body: [[0, 1], [0, 2], [0, 3]] }, { body: opp }] });
+  assert.deepEqual(chooseMove(s, 0, WEIGHTS.duel), { move: 'down', level: 1 });
+});
+
+test('chooseMove: hungry snake heads for the food', () => {
+  const s = mk({
+    snakes: [
+      { body: [[5, 5], [5, 4], [4, 4], [4, 5]], health: 5 },
+      { body: [[5, 0], [4, 0], [3, 0]] },
+    ],
+    food: [[5, 8]],
+  });
+  assert.deepEqual(chooseMove(s, 0, WEIGHTS.duel), { move: 'up', level: 0 });
 });

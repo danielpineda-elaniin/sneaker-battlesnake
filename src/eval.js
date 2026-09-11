@@ -1,5 +1,5 @@
 // src/eval.js
-import { manhattan, buildFreeAt } from './board.js';
+import { DIRS, neighbor, manhattan, buildFreeAt, simulate } from './board.js';
 import { floodFill, distances, voronoi } from './space.js';
 
 export const HUNGER_MULT = 100;
@@ -44,4 +44,52 @@ export function evaluate(state, you, w) {
   }
 
   return w.space * space + w.terr * terr + w.len * len + w.center * center + w.choke * choke + w.food * food;
+}
+
+export function legalMoves(state, you, grid, level = 0) {
+  const me = state.snakes[you], head = me.body[0], n = me.body.length;
+  const danger = new Set();
+  if (level < 2) {
+    for (let j = 0; j < state.snakes.length; j++) {
+      const o = state.snakes[j];
+      if (j === you || !o.alive) continue;
+      const oh = o.body[0];
+      let olen = o.body.length;
+      for (const d of DIRS) {
+        const c = neighbor(state, oh, d);
+        if (c >= 0 && state.food.includes(c)) { olen++; break; }
+      }
+      if (olen < n) continue;
+      for (const d of DIRS) {
+        const c = neighbor(state, oh, d);
+        if (c >= 0) danger.add(c);
+      }
+    }
+  }
+  const out = [];
+  for (const d of DIRS) {
+    const c = neighbor(state, head, d);
+    if (c < 0) continue;
+    if (level < 3 && grid[c] > 1) continue;
+    if (danger.has(c)) continue;
+    if (level < 1 && floodFill(state, grid, c, 1) < n - 1) continue;
+    out.push(d);
+  }
+  return out;
+}
+
+export function chooseMove(state, you, w) {
+  const grid = buildFreeAt(state);
+  for (let level = 0; level <= 3; level++) {
+    const moves = legalMoves(state, you, grid, level);
+    if (moves.length === 0) continue;
+    let best = moves[0], bestScore = -Infinity;
+    for (const m of moves) {
+      const next = simulate(state, state.snakes.map((_, i) => (i === you ? m : null)));
+      const score = evaluate(next, you, w);
+      if (score > bestScore) { bestScore = score; best = m; }
+    }
+    return { move: best, level };
+  }
+  return { move: 'up', level: 4 };
 }
