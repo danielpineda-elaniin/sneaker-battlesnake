@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { idx, buildFreeAt } from '../src/board.js';
-import { floodFill, distances } from '../src/space.js';
+import { floodFill, distances, voronoi } from '../src/space.js';
 import { mk } from './helpers.js';
 
 test('floodFill: empty board from a corner reaches everything', () => {
@@ -37,4 +37,29 @@ test('distances: BFS times respect vacate times, -1 for unreachable', () => {
   assert.equal(d[idx(s, 1, 2)], 3);
   assert.equal(d[idx(s, 1, 0)], 3);
   assert.equal(d[idx(s, 2, 2)], -1);
+});
+
+test('voronoi: symmetric split on an open board', () => {
+  const s = mk({ w: 5, h: 1, snakes: [{ body: [[0, 0]] }, { body: [[4, 0]] }] });
+  const c = voronoi(s, buildFreeAt(s));
+  assert.deepEqual([...c], [1, 1]);
+});
+
+test('voronoi: distance tie goes to the longer snake', () => {
+  const s = mk({ w: 5, h: 2, snakes: [{ body: [[0, 0], [0, 1]] }, { body: [[4, 0]] }] });
+  const c = voronoi(s, buildFreeAt(s));
+  assert.deepEqual([...c], [5, 3]);
+});
+
+test('voronoi: equal-length tie is contested and propagates', () => {
+  const s = mk({ w: 5, h: 2, snakes: [{ body: [[0, 0], [0, 1]] }, { body: [[4, 0], [4, 1]] }] });
+  const c = voronoi(s, buildFreeAt(s));
+  assert.deepEqual([...c], [3, 3]);
+});
+
+test('voronoi: dead snakes claim nothing', () => {
+  const s = mk({ w: 5, h: 1, snakes: [{ body: [[0, 0]] }, { body: [[4, 0]] }] });
+  s.snakes[1].alive = false;
+  const c = voronoi(s, buildFreeAt(s));
+  assert.deepEqual([...c], [4, 0]);
 });
