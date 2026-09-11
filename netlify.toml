@@ -1,0 +1,22 @@
+[build]
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/"
+  to = "/.netlify/functions/info"
+  status = 200
+
+[[redirects]]
+  from = "/start"
+  to = "/.netlify/functions/start"
+  status = 200
+
+[[redirects]]
+  from = "/move"
+  to = "/.netlify/functions/move"
+  status = 200
+
+[[redirects]]
+  from = "/end"
+  to = "/.netlify/functions/end"
+  status = 200
