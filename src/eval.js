@@ -80,13 +80,29 @@ export function legalMoves(state, you, grid, level = 0) {
 
 export function chooseMove(state, you, w) {
   const grid = buildFreeAt(state);
+  const me = state.snakes[you];
+
+  // When critically hungry, reward any leaf where the snake eats.
+  // evaluate() sees post-simulate state where food is already consumed (foodD=Infinity → food=0),
+  // so without this bonus the hungry-band term vanishes on the eat-leaf and the snake circles.
+  let eatBonus = 0;
+  if (state.food.length > 0) {
+    const d = distances(state, grid, me.body[0], 0);
+    let minD = Infinity;
+    for (const f of state.food) if (d[f] >= 0 && d[f] < minD) minD = d[f];
+    if (minD !== Infinity && me.health <= minD + 2)
+      eatBonus = HUNGER_MULT * (1 - minD / (state.width + state.height));
+  }
+
   for (let level = 0; level <= 3; level++) {
     const moves = legalMoves(state, you, grid, level);
     if (moves.length === 0) continue;
     let best = moves[0], bestScore = -Infinity;
     for (const m of moves) {
       const next = simulate(state, state.snakes.map((_, i) => (i === you ? m : null)));
-      const score = evaluate(next, you, w);
+      let score = evaluate(next, you, w);
+      if (eatBonus > 0 && next.snakes[you].alive && next.snakes[you].health > me.health)
+        score += eatBonus;
       if (score > bestScore) { bestScore = score; best = m; }
     }
     return { move: best, level };
