@@ -24,12 +24,24 @@ Dos escenarios de competencia:
    `victorias / partidas totales`. Los empates por muerte mutua cuentan en
    el denominador — ver el criterio 5.
 4. Profundidad alcanzada: ≥4 en duelo, ≥2 en FFA de 4, en el 90% de turnos.
-5. **Tasa de muerte mutua ≤5%** en duelos contra sí misma. El filtro duro de
-   head-to-head (§8) prohíbe entrar voluntariamente a una casilla adyacente
-   a una cabeza rival de longitud igual o mayor, así que una muerte mutua
-   solo debería ocurrir cuando todos los demás movimientos son peores. Una
-   tasa alta no es un resultado legítimo del juego: es evidencia de que el
-   filtro no funciona o de que la evaluación valora mal el choque.
+5. **Cero muertes mutuas voluntarias.** El arena registra, por cada muerte
+   mutua, si Sneaker tenía otro movimiento legal en ese turno. Si lo tenía,
+   la muerte fue voluntaria y es un bug: el filtro duro de head-to-head (§8)
+   prohíbe entrar a una casilla que un rival de longitud igual o mayor puede
+   alcanzar. Una muerte mutua forzada — todos los movimientos legales
+   terminan en choque — es un resultado legítimo de un late game estrecho y
+   no cuenta contra este criterio.
+
+   La tasa bruta de muertes mutuas se reporta como señal de humo, no como
+   umbral: una tasa alta con cero voluntarias significa tableros estrechos,
+   no un filtro roto.
+
+   El formato del torneo resuelve las muertes mutuas de bracket con una
+   revancha de muerte súbita (y por sembrado si no hay tiempo), así que no
+   son un riesgo de eliminación silenciosa. Este criterio existe por
+   corrección del filtro, no por el torneo: un filtro que deja pasar
+   choques contra iguales también deja pasar choques contra más largos, y
+   eso es derrota sin revancha.
 
 ### Evidencia preliminar
 
@@ -40,9 +52,8 @@ aproximadamente ±8%, así que cubre el umbral del 60% pero con poco margen.
 
 **El 22% de muertes mutuas es una alarma, no un dato de referencia.** El
 simulador o bien no implementó el filtro de head-to-head, o bien usó
-tableros de partida irrealmente estrechos. Reproducir esa cifra en el arena
-real sería un bug a investigar, no un comportamiento a aceptar. Por eso
-existe el criterio 5.
+tableros de partida irrealmente estrechos. El arena real distingue los dos
+casos registrando si cada muerte fue forzada o voluntaria — ver criterio 5.
 
 Estos números validan la dirección de la función de evaluación. No validan
 el motor, que todavía no existe.
@@ -518,12 +529,14 @@ node test/arena.js --games 500 --a ffa --b experimental
 Reporta, desglosado:
 
 - victorias / derrotas / muertes mutuas, por separado
+- muertes mutuas **forzadas vs voluntarias** — voluntaria significa que
+  Sneaker tenía otro movimiento legal ese turno
 - turnos de supervivencia promedio
 - causas de muerte: pared, cuerpo, head-to-head, inanición
 
-La muerte mutua se reporta aparte porque es el criterio de éxito 5 y porque
-un cambio de pesos que reduce empates sin cambiar victorias netas sigue
-siendo una mejora en un torneo por puntos.
+La distinción forzada/voluntaria es el criterio de éxito 5. Es lo que
+convierte "hubo muchos empates" en "el filtro está roto" o en "los tableros
+son estrechos", que exigen respuestas opuestas.
 
 Esto es lo que convierte el afinado de pesos en medición en vez de
 adivinanza, y es la razón por la que se construye antes que la búsqueda.
@@ -554,26 +567,63 @@ Cobertura mínima:
 - **Filtros duros**: el filtro de head-to-head rechaza la casilla adyacente
   a un rival de igual longitud cuando existe alternativa.
 
+### Pruebas contra la URL desplegada
+
+El CLI oficial de Battlesnake corre el motor del juego localmente y llama a
+la URL por HTTP real. Es la prueba de integración de extremo a extremo, y
+la única forma de medir latencia de red antes de registrar la serpiente.
+
+```bash
+# humo: sobrevive sola, sin movimientos ilegales ni timeouts
+battlesnake play -W 11 -H 11 -g solo -v --url https://<app>.fly.dev
+
+# duelo: dos instancias de la misma URL
+battlesnake play -W 11 -H 11 -g standard -v \
+  --name a --url https://<app>.fly.dev \
+  --name b --url https://<app>.fly.dev
+
+# FFA: cuatro instancias
+battlesnake play -W 11 -H 11 -g standard -v \
+  --name a --url https://<app>.fly.dev \
+  --name b --url https://<app>.fly.dev \
+  --name c --url https://<app>.fly.dev \
+  --name d --url https://<app>.fly.dev
+```
+
+**Salvedad sobre la latencia medida.** El CLI corre en la máquina de quien
+lo ejecuta, así que el round-trip observado es máquina-local → Fly.io, no
+motor-oficial → Fly.io. Sirve como cota — un timeout desde la laptop
+garantiza timeouts desde el motor oficial — pero no es la cifra definitiva.
+`SEARCH_BUDGET_MS` se fija con margen sobre lo que el CLI muestre, y se
+revisa tras las primeras partidas reales en la plataforma.
+
 ### Pendiente antes de competir
 
-1. Repetir las mediciones preliminares de §1 con el motor real y ≥500
-   partidas, para estrechar el intervalo de confianza.
-2. Investigar la tasa de muerte mutua. Si se reproduce por encima del 5%,
-   es un bug.
-3. Medir round-trip real Fly.io ↔ motor de Battlesnake y fijar
-   `SEARCH_BUDGET_MS`.
-4. Medir `nodos/segundo` en la máquina desplegada; decidir `shared` vs
-   `performance`.
-5. Probar explícitamente el caso de reflexión horizontal de §7.
-6. Afinar pesos contra al menos una serpiente pública fuerte, no solo contra
+Fecha límite de registro: **2026-09-16**. En orden de prioridad:
+
+1. Humo con el CLI en modo `solo` contra la URL desplegada: cero
+   movimientos ilegales, cero timeouts. Sin esto no hay serpiente.
+2. Medir `nodos/segundo` en la máquina desplegada; decidir `shared` vs
+   `performance`. Fijar `SEARCH_BUDGET_MS` con margen sobre el RTT del CLI.
+3. Arena ≥500 partidas contra el baseline de profundidad 0. Confirmar el
+   ≥60% y verificar cero muertes mutuas voluntarias.
+4. Duelo y FFA con el CLI contra la propia URL, para ver el comportamiento
+   real bajo carga de red en vez de en el arena local.
+5. Afinar pesos contra al menos una serpiente pública fuerte, no solo contra
    el baseline interno. El 69.2% preliminar es una señal de dirección, no
    una medida de competitividad de torneo.
+6. Probar explícitamente el caso de reflexión horizontal de §7.
+
+Los puntos 5 y 6 son los primeros que se recortan si el tiempo no alcanza.
 
 ## 12. Despliegue
 
 `fly.toml` con `min_machines_running = 1` y el puerto interno que
 `index.js` expone. Despliegue por `fly deploy`. Sin variables de entorno ni
 secretos — Sneaker no depende de configuración externa.
+
+Tras cada despliegue, el humo del CLI en modo `solo` (§11) contra la URL
+antes de dar la versión por buena. Es un comando y tarda segundos.
 
 ## 13. Fuera de alcance
 
