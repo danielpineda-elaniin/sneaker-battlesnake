@@ -294,7 +294,7 @@ operaciones — el argumento de rendimiento a favor de Manhattan no existe.
 | `lenAdv` | (nuestra longitud − longitud del rival más largo) / ancho, acotado a ±1 | -1..1 |
 | `center` | 1 − (distancia Manhattan al centro / `radioMax`) | 0..1 |
 | `choke` | 1 − (flood fill desde la cabeza del rival más cercano / casillas totales) | 0..1 |
-| `food` | ver abajo | 0..1, o `HUNGER_OVERRIDE` |
+| `food` | ver abajo | 0..1.5, o hasta `HUNGER_MULT` |
 
 donde `radioMax = floor(ancho/2) + floor(alto/2)` — la distancia Manhattan
 desde una esquina al centro, 10 en un tablero 11x11.
@@ -314,12 +314,13 @@ Resultado: suma ponderada de los términos.
 d = distancia BFS a la comida alcanzable más cercana
 si no hay comida alcanzable → 0
 
+cercania = 1 - d / (ancho + alto)
 hambre = salud <= d + 2
-si hambre → devuelve HUNGER_OVERRIDE
+si hambre → devuelve HUNGER_MULT * cercania
 
 base = (100 - salud) / 100
 crecimiento = nuestra longitud <= longitud del rival más largo ? 0.5 : 0
-devuelve (base + crecimiento) * (1 - d / (ancho + alto))
+devuelve (base + crecimiento) * cercania
 ```
 
 **La comida es un peso, no un filtro.** Como quinto paso secuencial solo
@@ -328,12 +329,16 @@ comida en una dirección de bajo Voronoi, esa arquitectura mata de hambre a
 la serpiente. Como término ponderado, la urgencia escala de forma continua y
 compite de verdad contra el control territorial.
 
-**`HUNGER_OVERRIDE = 100` es una salvaguarda dura.** Si la salud no alcanza
-para llegar a la comida más cercana con dos turnos de margen, comer se vuelve
-dominante. Los demás términos están acotados a 0..1 y sus pesos suman
-alrededor de 11 en el vector más cargado, así que `food × 100` supera
-cualquier combinación posible por un margen amplio. Si los pesos se afinan
-al alza, esta relación debe reverificarse.
+**`HUNGER_MULT = 100` es una salvaguarda dura y monótona.** Si la salud no
+alcanza para llegar a la comida más cercana con dos turnos de margen, el
+término pasa a `100 × cercanía`. Los demás términos están acotados y sus
+pesos suman alrededor de 11 en el vector más cargado, así que a distancias
+razonables la comida domina. Y como sigue multiplicando por cercanía, entre
+dos hojas hambrientas gana siempre la más cercana a la comida.
+
+Una constante plana en la banda de hambre sería un error: dispararía con más
+facilidad cuanto más lejos estuviera la comida (la condición `salud <= d + 2`
+se cumple antes con `d` grande), y la búsqueda preferiría la hoja más lejana.
 
 **El crecimiento temprano se ata a la ventaja de longitud, no al número de
 turno.** Mientras no seamos estrictamente los más largos, la comida pesa más;
