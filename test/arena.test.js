@@ -50,3 +50,22 @@ test('run: aggregates across games and labels', () => {
   assert.equal(sum.wins.length, 2);
   assert.equal(sum.wins[0] + sum.wins[1] + sum.ties + sum.timeouts, 3);
 });
+
+test('play with depth=1 returns avgDepth >= 1', () => {
+  const r = rng(77);
+  // maxTurns=3 keeps wall time ~2s (2 snakes * 3 turns * 350ms budget each)
+  const result = play(r, ['auto', 'auto'], 1, 3);
+  assert.ok(result.avgDepth >= 1, `avgDepth=${result.avgDepth}`);
+});
+
+test('play with depth=1 returns totalNodes > 0', () => {
+  const r = rng(88);
+  const result = play(r, ['auto', 'auto'], 1, 3);
+  assert.ok(result.totalNodes > 0, `totalNodes=${result.totalNodes}`);
+});
+
+test('run with depth=1 returns nodesPerSec > 0', () => {
+  // maxTurns=3 keeps wall time ~4s (1 game * 2 snakes * 3 turns * 350ms)
+  const summary = run({ games: 1, seed: 99, labels: ['auto', 'auto'], depth: 1, maxTurns: 3 });
+  assert.ok(summary.nodesPerSec > 0, `nodesPerSec=${summary.nodesPerSec}`);
+});
