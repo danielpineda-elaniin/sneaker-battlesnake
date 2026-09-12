@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { simulate, idx } from '../src/board.js';
 import { chooseMove } from '../src/eval.js';
+import { findMove } from '../src/search.js';
 import { WEIGHTS, pick } from '../src/weights.js';
 
 export const MAX_TURNS = 500;
@@ -54,22 +55,38 @@ export function spawnFood(state, r) {
 
 const weightsFor = (label, state) => (label === 'auto' ? pick(state) : WEIGHTS[label]);
 
-export function play(r, labels) {
+// depth=0: use chooseMove (heuristic only)
+// depth>0: use findMove with iterative deepening up to that depth budget
+// maxTurns: cap for testing (default MAX_TURNS)
+export function play(r, labels, depth = 0, maxTurns = MAX_TURNS) {
   let state = initial(r, labels.length);
+  state.you = 0;
   const level = labels.map(() => 0);
   const dead = labels.map(() => false);
   let mutual = 0, voluntaryHead = 0, forcedHead = 0;
+  let totalNodes = 0, depthSum = 0, minDepthGame = Infinity, depthSamples = 0;
 
-  while (state.turn < MAX_TURNS) {
+  while (state.turn < maxTurns) {
     let alive = 0;
     for (const s of state.snakes) if (s.alive) alive++;
     if (alive <= 1) break;
 
     const moves = state.snakes.map((s, i) => {
       if (!s.alive) return null;
-      const res = chooseMove(state, i, weightsFor(labels[i], state));
-      level[i] = res.level;
-      return res.move;
+      const w = weightsFor(labels[i], state);
+      if (depth > 0) {
+        const res = findMove({ ...state, you: i }, i, w);
+        level[i] = res.depthReached;
+        totalNodes += res.nodes;
+        depthSum += res.depthReached;
+        if (res.depthReached < minDepthGame) minDepthGame = res.depthReached;
+        depthSamples++;
+        return res.move;
+      } else {
+        const res = chooseMove(state, i, w);
+        level[i] = res.level;
+        return res.move;
+      }
     });
     state = simulate(state, moves);
     spawnFood(state, r);
@@ -94,35 +111,55 @@ export function play(r, labels) {
     timeout: survivors.length > 1,
     causes: state.snakes.map(s => s.cause ?? null),
     mutual, voluntaryHead, forcedHead,
+    totalNodes,
+    avgDepth: depthSamples > 0 ? depthSum / depthSamples : 0,
+    minDepth: depthSamples > 0 ? minDepthGame : 0,
   };
 }
 
-export function run({ games, seed, labels }) {
+export function run({ games, seed, labels, depth = 0, maxTurns = MAX_TURNS }) {
   const r = rng(seed);
   const wins = labels.map(() => 0);
   const causes = {};
   let ties = 0, timeouts = 0, turns = 0, mutual = 0, voluntaryHead = 0, forcedHead = 0;
+  let totalNodes = 0, depthSum = 0, globalMinDepth = Infinity;
+  const t0 = performance.now();
   for (let g = 0; g < games; g++) {
-    const res = play(r, labels);
+    const res = play(r, labels, depth, maxTurns);
     turns += res.turns;
     if (res.timeout) timeouts++;
     else if (res.winner < 0) ties++;
     else wins[res.winner]++;
     for (const c of res.causes) if (c) causes[c] = (causes[c] ?? 0) + 1;
     mutual += res.mutual; voluntaryHead += res.voluntaryHead; forcedHead += res.forcedHead;
+    totalNodes += res.totalNodes;
+    depthSum += res.avgDepth;
+    if (res.minDepth > 0 && res.minDepth < globalMinDepth) globalMinDepth = res.minDepth;
   }
-  return { games, labels, wins, ties, timeouts, avgTurns: turns / games, causes, mutual, voluntaryHead, forcedHead };
+  const elapsedSec = (performance.now() - t0) / 1000;
+  return {
+    games, labels, wins, ties, timeouts,
+    avgTurns: turns / games,
+    causes, mutual, voluntaryHead, forcedHead,
+    avgDepth: depthSum / games,
+    minDepth: globalMinDepth === Infinity ? 0 : globalMinDepth,
+    nodesPerSec: elapsedSec > 0 ? totalNodes / elapsedSec : 0,
+  };
 }
 
 function report(s) {
   const seats = s.labels.map((l, i) => `${'ABCD'[i]}(${l}) ${s.wins[i]}`).join('   ');
-  return [
+  const lines = [
     `games ${s.games}   snakes ${s.labels.length}`,
     `wins: ${seats}   ties ${s.ties}   timeouts ${s.timeouts}`,
     `avg turns ${s.avgTurns.toFixed(1)}`,
     `deaths: ${Object.entries(s.causes).map(([k, v]) => `${k} ${v}`).join('   ')}`,
     `head-to-head deaths: voluntary ${s.voluntaryHead}   forced ${s.forcedHead}   mutual events ${s.mutual}`,
-  ].join('\n');
+  ];
+  if (s.nodesPerSec > 0) {
+    lines.push(`search: avg depth ${s.avgDepth.toFixed(2)}   min depth ${s.minDepth}   nodes/sec ${Math.round(s.nodesPerSec).toLocaleString()}`);
+  }
+  return lines.join('\n');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -131,6 +168,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
       games:  { type: 'string', default: '100' },
       snakes: { type: 'string', default: '2' },
       seed:   { type: 'string', default: '1' },
+      depth:  { type: 'string', default: '0' },
       a:      { type: 'string', default: 'auto' },
       b:      { type: 'string', default: 'auto' },
     },
@@ -138,7 +176,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const n = Number(values.snakes);
   const labels = Array.from({ length: n }, (_, i) => (i % 2 === 0 ? values.a : values.b));
   const t0 = performance.now();
-  const summary = run({ games: Number(values.games), seed: Number(values.seed), labels });
+  const summary = run({ games: Number(values.games), seed: Number(values.seed), labels, depth: Number(values.depth) });
   console.log(report(summary));
   console.log(`elapsed ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 }
